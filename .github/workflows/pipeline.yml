@@ -1,39 +1,33 @@
-name: VEGA Secure Build Pipeline
+name: VEGA Makefile Build Pipeline
 
 on: [push]
 
 jobs:
-  build_and_verify:
+  build:
     runs-on: ubuntu-latest
     steps:
       - name: 1. Checkout Code
         uses: actions/checkout@v3
 
-      - name: 2. Security Scan (Static Analysis)
+      - name: 2. Security Check
         run: |
           sudo apt-get install -y cppcheck
-          cppcheck --error-exitcode=1 src/
+          cppcheck --enable=all --error-exitcode=1 src/
 
-      - name: 3. Setup Toolchain (Ephemeral Environment)
+      - name: 3. Setup Official VEGA Tools
         run: |
-          cd /opt
-          sudo git clone https://gitlab.com/riscv-vega/community/vega-sdk.git
-          sudo git clone https://gitlab.com/riscv-vega/community/vega-tools-rv32.git
-          sudo chmod -R 777 /opt/vega-tools-rv32/bin
+          sudo git clone https://gitlab.com/riscv-vega/community/vega-sdk.git /opt/vega-sdk
+          sudo git clone https://gitlab.com/riscv-vega/community/vega-tools-rv32.git /opt/vega-tools
+          echo "/opt/vega-tools/bin" >> $GITHUB_PATH
 
-      - name: 4. Build with PlatformIO
-        run: |
-          pip install -U platformio
-          pio run
-        env:
-          PLATFORMIO_VEGA_SDK_PATH: "/opt/vega-sdk"
-          PLATFORMIO_VEGA_TOOLS_PATH: "/opt/vega-tools-rv32/bin"
-
-      - name: 5. Generate and Upload Executable
+      - name: 4. Build All Projects via Makefile
+        run: make SDK_PATH=/opt/vega-sdk
+        
+      - name: 5. Store Executables as Artifacts
         uses: actions/upload-artifact@v3
         with:
-          name: aries_v3_firmware
-          path: .pio/build/aries_v3/firmware.bin
+          name: compiled-binaries
+          # This captures every .bin, .elf, and .hex inside your src subfolders
+          path: src/**/*.bin
           
-      # Note: Step 6 is automatic. GitHub Actions wipes the runner 
-      # immediately after completion for security.
+      # Environment is wiped automatically by GitHub after this step.
