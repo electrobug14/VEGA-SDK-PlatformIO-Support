@@ -1,3 +1,4 @@
+[![VEGA Secure Build Pipeline](https://github.com/electrobug14/VEGA-SDK-PlatformIO-Support/actions/workflows/pipeline.yml/badge.svg)](https://github.com/electrobug14/VEGA-SDK-PlatformIO-Support/actions/workflows/pipeline.yml)
 ![image](https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcT1sa7FqqlQVvSHvxl-rlpHxIXu3ZU8VghDlw&s)
 ![board](https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcTz9e8oIw5dMQcbu74iiV59oWjToqgbEA2E1Q&s)
 # CDAC Aries V3 (THEJAS32) - PlatformIO Baremetal Project
