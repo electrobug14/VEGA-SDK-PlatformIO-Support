@@ -1,6 +1,6 @@
 """
-build_vega.py — Cross-Platform PlatformIO extra_script (pre)
-Fixed for Linux (Codespaces/GitHub Actions) and Windows compatibility.
+build_vega.py — Multi-Project Aware Script
+Detects subfolders in src/ and outputs binaries back to the project folder.
 """
 
 Import("env")
@@ -8,6 +8,7 @@ Import("env")
 import os
 import platform
 import subprocess
+import shutil
 from pathlib import Path
 
 # -----------------------------------------------------------------------
@@ -16,123 +17,102 @@ from pathlib import Path
 IS_WINDOWS = platform.system() == "Windows"
 suffix = ".exe" if IS_WINDOWS else ""
 
-# -----------------------------------------------------------------------
-# Path Resolution (Env Var first for Cloud, then platformio.ini for Local)
-# -----------------------------------------------------------------------
 def get_required_path(option_name):
-    # 1. Check for Environment Variable (used by GitHub Actions/Codespaces)
     env_var_name = f"PLATFORMIO_{option_name.upper()}"
     env_val = os.environ.get(env_var_name)
     if env_val:
         return Path(env_val).resolve()
     
-    # 2. Check platformio.ini
     path_str = env.GetProjectOption(option_name, "").strip()
     if not path_str:
-        raise SystemExit(f"ERROR: '{option_name}' is not set in platformio.ini or environment.")
-    
-    path = Path(path_str).resolve()
-    if not path.exists():
-        raise SystemExit(f"ERROR: Path '{path}' for '{option_name}' does not exist.")
-    return path
+        raise SystemExit(f"ERROR: '{option_name}' is not set.")
+    return Path(path_str).resolve()
 
 SDK_PATH  = get_required_path("vega_sdk_path")
 TOOLS_BIN = get_required_path("vega_tools_path")
 
-# Binary names dynamically adjust for Linux vs Windows
-# Note: Official Linux tools usually use 'riscv64-unknown-elf-' prefix
-# while some Windows builds use 'riscv64-vega-elf-'. Adjust if necessary.
+# Binary names adjust for Linux/Codespaces vs Windows
 TOOL_PREFIX = "riscv64-unknown-elf-" if not IS_WINDOWS else "riscv64-vega-elf-"
-
 GCC     = str(TOOLS_BIN / f"{TOOL_PREFIX}gcc{suffix}").replace("\\", "/")
-AR      = str(TOOLS_BIN / f"{TOOL_PREFIX}ar{suffix}").replace("\\", "/")
 OBJCOPY = str(TOOLS_BIN / f"{TOOL_PREFIX}objcopy{suffix}").replace("\\", "/")
 
 # -----------------------------------------------------------------------
-# SDK Directory Mapping
+# Multi-Project Detection Logic
+# -----------------------------------------------------------------------
+SRC_DIR = Path(env.subst("$PROJECT_SRC_DIR")).resolve()
+
+# Find the first subdirectory in src/ that contains a .c file
+# This assumes you only build ONE project folder at a time.
+project_subdirs = [d for d in SRC_DIR.iterdir() if d.is_dir() and list(d.glob("*.c"))]
+
+if not project_subdirs:
+    # Fallback to root src/ if no subfolders found
+    ACTIVE_PROJECT_PATH = SRC_DIR
+    print("[VEGA] Building from root src/ directory.")
+else:
+    # Pick the first one (or you could filter by an environment variable)
+    ACTIVE_PROJECT_PATH = project_subdirs[0]
+    print(f"[VEGA] Detected Project Folder: {ACTIVE_PROJECT_PATH.name}")
+
+# -----------------------------------------------------------------------
+# Compilation Flags
 # -----------------------------------------------------------------------
 BSP_DIR     = SDK_PATH / "bsp"
 INC_DIR     = BSP_DIR / "include"
 LD_SCRIPT   = str(BSP_DIR / "common" / "mbl.lds").replace("\\", "/")
-CRT_S       = str(BSP_DIR / "common" / "crt.S")
 STDLIB_C    = str(BSP_DIR / "common" / "stdlib.c")
 RAWFLOAT_C  = str(BSP_DIR / "common" / "rawfloat.c")
+CRT_S       = str(BSP_DIR / "common" / "crt.S")
 DRIVER_SRCS = list((BSP_DIR / "drivers").rglob("*.c"))
 
-INC     = str(INC_DIR).replace("\\", "/")
-BSP     = str(BSP_DIR).replace("\\", "/")
-SRC_DIR = Path(env.subst("$PROJECT_SRC_DIR")).resolve()
-SRC     = str(SRC_DIR).replace("\\", "/")
-
-# -----------------------------------------------------------------------
-# Compilation Flags (Enforcing -O0 for timing integrity)
-# -----------------------------------------------------------------------
+INCS    = f"-I{str(INC_DIR)} -I{str(BSP_DIR)} -I{str(ACTIVE_PROJECT_PATH)}"
 ARCH    = "-march=rv32im -mabi=ilp32 -mcmodel=medany"
-INCS    = f"-I{INC} -I{BSP} -I{SRC}"
 DEFS    = "-DTHEJAS32"
-OPT     = "-O0 -g -fno-builtin-printf -fno-builtin-puts -fno-builtin-memcmp -fno-common -fno-pic -ffunction-sections -fdata-sections"
-SDK_STDLIB = f"-include {INC}/stdlib.h"
-
-C_FLAGS   = f"{ARCH} {INCS} {DEFS} {OPT} {SDK_STDLIB}"
-LDFLAGS   = f"-nostartfiles -T{LD_SCRIPT} --specs=nano.specs -specs=nosys.specs -Wl,--gc-sections"
-LIBS      = f"-L{BSP} -Wl,--start-group -lvega -lc -lgcc -lm -Wl,--end-group"
+OPT     = "-O0 -g -fno-builtin-printf -fno-common -fno-pic"
+C_FLAGS = f"{ARCH} {INCS} {DEFS} {OPT} -include {str(INC_DIR)}/stdlib.h"
+LDFLAGS = f"-nostartfiles -T{LD_SCRIPT} --specs=nano.specs -specs=nosys.specs -Wl,--gc-sections"
+LIBS    = f"-L{str(BSP_DIR)} -Wl,--start-group -lvega -lc -lgcc -lm -Wl,--end-group"
 
 build_dir = Path(env.subst("$BUILD_DIR")).resolve()
 obj_dir   = build_dir / "vega_objs"
 obj_dir.mkdir(parents=True, exist_ok=True)
 
 def build_obj(src, obj):
-    src_path = Path(src)
-    obj_path = Path(obj)
-    if not obj_path.exists() or src_path.stat().st_mtime > obj_path.stat().st_mtime:
-        obj_path.parent.mkdir(parents=True, exist_ok=True)
-        # Use quotes around paths to handle spaces in folder names
-        cmd = f'"{GCC}" {C_FLAGS} -c "{str(src)}" -o "{obj}"'
-        print(f"[VEGA] Compiling {src_path.name}...")
-        subprocess.run(cmd, shell=True, check=True)
-    return env.File(str(obj_path))
+    if not Path(obj).exists() or Path(src).stat().st_mtime > Path(obj).stat().st_mtime:
+        Path(obj).parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run(f'"{GCC}" {C_FLAGS} -c "{str(src)}" -o "{obj}"', shell=True, check=True)
+    return env.File(str(obj))
 
-# -----------------------------------------------------------------------
-# Build Steps
-# -----------------------------------------------------------------------
-
-# 1. Compile BSP Objects (Drivers + SDK core)
-bsp_srcs = DRIVER_SRCS + [Path(STDLIB_C), Path(RAWFLOAT_C)]
-bsp_objs = []
-for s in bsp_srcs:
-    o = obj_dir / "bsp" / f"{s.stem}.o"
-    bsp_objs.append(build_obj(s, o))
-
-# Compile Assembly Entry Point (crt.S)
+# 1. BSP
+bsp_objs = [build_obj(s, obj_dir / "bsp" / f"{s.stem}.o") for s in DRIVER_SRCS + [Path(STDLIB_C), Path(RAWFLOAT_C)]]
 crt_o = obj_dir / "bsp" / "crt.o"
-if not Path(crt_o).exists() or Path(CRT_S).stat().st_mtime > Path(crt_o).stat().st_mtime:
-    subprocess.run(f'"{GCC}" {ARCH} {INCS} -c "{CRT_S}" -o "{crt_o}"', shell=True, check=True)
+subprocess.run(f'"{GCC}" {ARCH} {INCS} -c "{CRT_S}" -o "{crt_o}"', shell=True, check=True)
 bsp_objs.insert(0, env.File(str(crt_o)))
 
-# 2. Compile User Source Objects (src/*.c)
-user_srcs = list(SRC_DIR.glob("*.c"))
-user_objs = []
-for s in user_srcs:
-    o = obj_dir / "user" / f"{s.stem}.o"
-    user_objs.append(build_obj(s, o))
+# 2. Project Files
+user_objs = [build_obj(s, obj_dir / "user" / f"{s.stem}.o") for s in ACTIVE_PROJECT_PATH.glob("*.c")]
 
-# 3. Configure PlatformIO Environment
 env.Replace(PROGNAME="firmware", PROGSUFFIX=".elf")
 env.Append(PIOBUILDFILES=user_objs + bsp_objs)
-
-# Ensure PlatformIO doesn't try to use its own default build logic
 env["SRC_FILTER"] = "-<*>"
+env.Replace(LINKCOM = f'"{GCC}" {ARCH} {LDFLAGS} -o $TARGET $SOURCES {LIBS}')
 
-# Override the Link command to use the RISC-V GCC with our custom flags
-env.Replace(
-    LINKCOM = f'"{GCC}" {ARCH} {LDFLAGS} -o $TARGET $SOURCES {LIBS}'
-)
+# -----------------------------------------------------------------------
+# Post-Action: Copy binaries to Project Folder
+# -----------------------------------------------------------------------
+def move_binaries_to_project(source, target, env):
+    elf_path = Path(target[0].get_abspath())
+    bin_path = elf_path.with_suffix(".bin")
+    hex_path = elf_path.with_suffix(".hex")
 
-# 4. Post-Action: Convert ELF to BIN
-def objcopy_to_bin(source, target, env):
-    elf = str(target[0])
-    bin_out = elf.replace(".elf", ".bin")
-    subprocess.run(f'"{OBJCOPY}" -O binary "{elf}" "{bin_out}"', shell=True, check=True)
-    print(f"[VEGA] Cloud-Ready Binary generated: {bin_out}")
+    # Generate BIN and HEX
+    subprocess.run(f'"{OBJCOPY}" -O binary "{elf_path}" "{bin_path}"', shell=True, check=True)
+    subprocess.run(f'"{OBJCOPY}" -O ihex "{elf_path}" "{hex_path}"', shell=True, check=True)
 
-env.AddPostAction("$BUILD_DIR/${PROGNAME}.elf", objcopy_to_bin)
+    # Copy to the specific Project Folder inside src/
+    for ext_file in [elf_path, bin_path, hex_path]:
+        dest = ACTIVE_PROJECT_PATH / ext_file.name
+        shutil.copy2(ext_file, dest)
+        print(f"[VEGA] Success! Copied to: {dest}")
+
+env.AddPostAction("$BUILD_DIR/${PROGNAME}.elf", move_binaries_to_project)
