@@ -1,4 +1,4 @@
-name: VEGA Makefile Build Pipeline
+name: VEGA Secure Build Pipeline
 
 on: [push]
 
@@ -6,28 +6,30 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: 1. Checkout Code
-        uses: actions/checkout@v3
+      - name: 1. Checkout Your Code
+        uses: actions/checkout@v4
 
-      - name: 2. Security Check
+      - name: 2. Security Check (C Scan)
         run: |
           sudo apt-get install -y cppcheck
           cppcheck --enable=all --error-exitcode=1 src/
 
-      - name: 3. Setup Official VEGA Tools
+      - name: 3. Setup Toolchain (Local Context)
         run: |
-          sudo git clone https://gitlab.com/riscv-vega/community/vega-sdk.git /opt/vega-sdk
-          sudo git clone https://gitlab.com/riscv-vega/community/vega-tools-rv32.git /opt/vega-tools
-          echo "/opt/vega-tools/bin" >> $GITHUB_PATH
-
-      - name: 4. Build All Projects via Makefile
-        run: make SDK_PATH=/opt/vega-sdk
-        
-      - name: 5. Store Executables as Artifacts
-        uses: actions/upload-artifact@v3
-        with:
-          name: compiled-binaries
-          # This captures every .bin, .elf, and .hex inside your src subfolders
-          path: src/**/*.bin
+          # Clone Tools and SDK into the workspace folder to avoid permission errors
+          git clone --depth 1 https://gitlab.com/riscv-vega/community/vega-sdk.git $GITHUB_WORKSPACE/vega-sdk
+          git clone --depth 1 https://gitlab.com/riscv-vega/community/vega-tools-rv32.git $GITHUB_WORKSPACE/vega-tools
           
-      # Environment is wiped automatically by GitHub after this step.
+          # Add the tools to the actual GitHub Path
+          echo "$GITHUB_WORKSPACE/vega-tools/bin" >> $GITHUB_PATH
+
+      - name: 4. Build All Projects
+        run: |
+          # We pass the absolute path of the SDK to our Makefile
+          make SDK_PATH=$GITHUB_WORKSPACE/vega-sdk
+
+      - name: 5. Archive Binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: vega-firmware-binaries
+          path: src/**/*.bin
