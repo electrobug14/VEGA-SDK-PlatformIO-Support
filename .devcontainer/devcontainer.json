@@ -1,0 +1,15 @@
+{
+  "name": "Aries V3 Cloud Development",
+  "image": "mcr.microsoft.com/vscode/devcontainers/python:3.9",
+  "features": {
+    "ghcr.io/devcontainers/features/common-utils:1": {
+      "installZsh": true
+    }
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": ["platformio.platformio-ide", "ms-vscode.cpptools"]
+    }
+  },
+  "postCreateCommand": "bash .devcontainer/setup_tools.sh"
+}
