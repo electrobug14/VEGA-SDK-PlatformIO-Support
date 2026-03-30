@@ -1,0 +1,39 @@
+name: VEGA Secure Build Pipeline
+
+on: [push]
+
+jobs:
+  build_and_verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 1. Checkout Code
+        uses: actions/checkout@v3
+
+      - name: 2. Security Scan (Static Analysis)
+        run: |
+          sudo apt-get install -y cppcheck
+          cppcheck --error-exitcode=1 src/
+
+      - name: 3. Setup Toolchain (Ephemeral Environment)
+        run: |
+          cd /opt
+          sudo git clone https://gitlab.com/riscv-vega/community/vega-sdk.git
+          sudo git clone https://gitlab.com/riscv-vega/community/vega-tools-rv32.git
+          sudo chmod -R 777 /opt/vega-tools-rv32/bin
+
+      - name: 4. Build with PlatformIO
+        run: |
+          pip install -U platformio
+          pio run
+        env:
+          PLATFORMIO_VEGA_SDK_PATH: "/opt/vega-sdk"
+          PLATFORMIO_VEGA_TOOLS_PATH: "/opt/vega-tools-rv32/bin"
+
+      - name: 5. Generate and Upload Executable
+        uses: actions/upload-artifact@v3
+        with:
+          name: aries_v3_firmware
+          path: .pio/build/aries_v3/firmware.bin
+          
+      # Note: Step 6 is automatic. GitHub Actions wipes the runner 
+      # immediately after completion for security.
