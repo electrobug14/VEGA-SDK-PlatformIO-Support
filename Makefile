@@ -1,20 +1,18 @@
-# Root Wrapper Makefile
-SDK_PATH ?= /home/vscode/vega-sdk
-TOOLS_PATH ?= /home/vscode/vega-tools-rv32/bin
-export PATH := $(TOOLS_PATH):$(PATH)
+# Root Makefile for multi-project builds
+SDK_PATH ?= $(shell pwd)/vega-sdk
 
-# Find all subdirectories in src that have a main.c
-PROJECTS := $(shell find src -maxdepth 2 -name 'main.c' -exec dirname {} \;)
+# Find all folders in src/ that have a main.c file
+PROJECT_DIRS := $(shell find src -maxdepth 2 -name 'main.c' -exec dirname {} \;)
 
-.PHONY: all clean $(PROJECTS)
+.PHONY: all clean $(PROJECT_DIRS)
 
-all: $(PROJECTS)
+all: $(PROJECT_DIRS)
 
-$(PROJECTS):
-	@echo "Building project in $@..."
+$(PROJECT_DIRS):
+	@echo "--- Building $@ ---"
 	$(MAKE) -C $@ SDK_PATH=$(SDK_PATH)
 
 clean:
-	@for dir in $(PROJECTS); do \
+	@for dir in $(PROJECT_DIRS); do \
 		$(MAKE) -C $$dir clean; \
 	done
